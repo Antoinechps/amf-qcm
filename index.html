@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>QCM AMF</title>
+  <style>
+    body { font-family: system-ui; margin: 20px; background: #f8f8f8; color: #333; }
+    .dark { background: #121212; color: #eee; }
+    .question { margin-bottom: 20px; padding: 15px; border: 1px solid #ccc; border-radius: 8px; background: #fff; }
+    .dark .question { background: #1e1e1e; border-color: #444; }
+    .answers button { display: block; margin: 5px 0; padding: 8px; border: 1px solid #ccc; border-radius: 5px; background: #eee; cursor: pointer; width: 100%; text-align: left; }
+    .answers button.correct { background: #4caf50; color: white; }
+    .answers button.wrong { background: #f44336; color: white; }
+    .controls { margin: 20px 0; }
+    .progress { margin: 10px 0; height: 20px; background: #ddd; border-radius: 10px; overflow: hidden; }
+    .progress-bar { height: 100%; width: 0%; background: #4caf50; }
+  </style>
+</head>
+<body>
+  <h1>Simulateur QCM AMF</h1>
+
+  <div class="controls">
+    <button id="modeToggle">Mode Entraînement</button>
+    <button id="themeToggle">🌙 Mode sombre</button>
+    <button id="start">Démarrer examen (120 questions)</button>
+    <div id="timer">⏱️ 00:00</div>
+    <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
+  </div>
+
+  <div id="quiz"></div>
+
+  <h2 id="score"></h2>
+  <canvas id="historyChart" width="600" height="200"></canvas>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    let QUESTIONS = [];
+    let currentIndex = 0;
+    let selected = [];
+    let correctCount = 0;
+    let modeExam = true; // true = examen, false = entraînement
+    let timerInterval;
+    let seconds = 0;
+    let history = JSON.parse(localStorage.getItem("history") || "[]");
+
+    const quizEl = document.getElementById("quiz");
+    const scoreEl = document.getElementById("score");
+    const progressBar = document.getElementById("progressBar");
+    const timerEl = document.getElementById("timer");
+
+    // Charger JSON
+    fetch("questions.json")
+      .then(r => r.json())
+      .then(data => { QUESTIONS = data; alert("✅ " + QUESTIONS.length + " questions prêtes !"); });
+
+    // Toggle mode
+    document.getElementById("modeToggle").onclick = () => {
+      modeExam = !modeExam;
+      document.getElementById("modeToggle").textContent = modeExam ? "Mode Entraînement" : "Mode Examen";
+    };
+
+    // Toggle dark mode
+    document.getElementById("themeToggle").onclick = () => {
+      document.body.classList.toggle("dark");
+    };
+
+    // Chrono
+    function startTimer() {
+      seconds = 0;
+      timerInterval = setInterval(() => {
+        seconds++;
+        let m = String(Math.floor(seconds/60)).padStart(2,"0");
+        let s = String(seconds%60).padStart(2,"0");
+        timerEl.textContent = `⏱️ ${m}:${s}`;
+      }, 1000);
+    }
+
+    // Commencer examen
+    document.getElementById("start").onclick = () => {
+      selected = QUESTIONS.sort(() => Math.random()-0.5).slice(0,120);
+      currentIndex = 0;
+      correctCount = 0;
+      scoreEl.textContent = "";
+      quizEl.innerHTML = "";
+      startTimer();
+      showQuestion();
+    };
+
+    function showQuestion() {
+      if (currentIndex >= selected.length) {
+        clearInterval(timerInterval);
+        let score = Math.round((correctCount / selected.length) * 100);
+        scoreEl.textContent = `Résultat final : ${correctCount}/${selected.length} (${score}%)`;
+        history.push({date: new Date().toLocaleString(), score});
+        localStorage.setItem("history", JSON.stringify(history));
+        updateChart();
+        return;
+      }
+      let q = selected[currentIndex];
+      let div = document.createElement("div");
+      div.className = "question";
+      div.innerHTML = `<h3>Q${currentIndex+1}. ${q.question}</h3>`;
+      let answers = [
+        {key:"A", text:q.a},
+        {key:"B", text:q.b},
+        {key:"C", text:q.c}
+      ].sort(() => Math.random()-0.5); // mélange des réponses
+      let answersDiv = document.createElement("div");
+      answersDiv.className = "answers";
+      answers.forEach(ans => {
+        let btn = document.createElement("button");
+        btn.textContent = ans.key + ". " + ans.text;
+        btn.onclick = () => {
+          if (ans.key === q.correct) {
+            correctCount++;
+            btn.classList.add("correct");
+          } else {
+            btn.classList.add("wrong");
+          }
+          if (!modeExam) {
+            // afficher la bonne réponse direct
+            let correctBtn = [...answersDiv.children].find(b => b.textContent.startsWith(q.correct));
+            correctBtn.classList.add("correct");
+          }
+          currentIndex++;
+          progressBar.style.width = ((currentIndex/selected.length)*100) + "%";
+          setTimeout(() => showQuestion(), 600);
+        };
+        answersDiv.appendChild(btn);
+      });
+      div.appendChild(answersDiv);
+      quizEl.innerHTML = "";
+      quizEl.appendChild(div);
+    }
+
+    // Graphique d'historique
+    function updateChart(){
+      let ctx = document.getElementById("historyChart");
+      new Chart(ctx, {
+        type:"line",
+        data:{
+          labels: history.map(h=>h.date),
+          datasets:[{
+            label:"Score (%)",
+            data: history.map(h=>h.score),
+            borderColor:"#4caf50",
+            fill:false
+          }]
+        },
+        options:{scales:{y:{beginAtZero:true,max:100}}}
+      });
+    }
+    updateChart();
+  </script>
+</body>
+</html>
