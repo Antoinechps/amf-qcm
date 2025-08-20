@@ -2,10 +2,11 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<title>QCM AMF — (Firebase + 1 question/écran)</title>
+<title>QCM AMF — 1 question/écran + confiance (Firebase)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root{--bg:#0f1115;--panel:#191c22;--card:#141820;--txt:#e5e7eb;--muted:#9aa3af;--accent:#6aa9ff;--ok:#10b981;--bad:#ef4444;--border:#2a2f3a}
+  *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,Segoe UI,Roboto}
   header{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;background:#121620;border-bottom:1px solid var(--border)}
   header h1{margin:0;font-size:18px}
@@ -119,14 +120,14 @@
   </section>
 </main>
 
-<!-- Firebase (modules) -->
+<!-- Firebase -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
   import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword,
            signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
-  import { getFirestore, collection, addDoc, getDocs, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
+  import { getFirestore } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
-  // >>> Votre configuration
+  // Config fournie
   const firebaseConfig = {
     apiKey: "AIzaSyDS8sQ8Sni01GZ7393K4kxLRsLm0oJu4as",
     authDomain: "amf-qcm.firebaseapp.com",
@@ -136,12 +137,10 @@
     appId: "1:544322848986:web:4f32743ebc51de84d8fde3"
   };
 
-  // Init
   const app = initializeApp(firebaseConfig);
   const auth = getAuth(app);
   const db = getFirestore(app);
 
-  // Expose pour le script non-module
   window.__fb = { auth, db };
   onAuthStateChanged(auth, (user)=>{
     window.CURRENT_USER = user || null;
@@ -169,29 +168,29 @@
 </script>
 
 <script>
-  // ===== Utils
+  // ========= UTIL =========
   const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
   const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
   const pad2=n=>String(n).padStart(2,"0");
   const esc=s=>(s||"").toString().replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
   const LOCAL_KEY="amf_local_history_v3";
 
-  // ===== State
+  // ========= ÉTAT =========
   let QUESTIONS=[], PICK=[], CUR=0;
   let MODE="exam";
   let DURATION_SEC=0, leftSec=0, timer=null, paused=false, started=false;
   let correctCount=0, sessionId=null, sessionStart=null;
   const ANSWERS=[]; // {i, choice, correct, confidence, ms}
 
-  // ===== Load questions
+  // ========= CHARGER QUESTIONS =========
   fetch("questions.json").then(r=>r.json()).then(data=>{
     QUESTIONS=data||[]; $("#totalSpan").textContent="Total : "+QUESTIONS.length+" questions"; $("#setupBar").style.width="100%";
   }).catch(()=>{$("#totalSpan").textContent="⚠️ Impossible de charger questions.json";});
 
-  // ===== Screens
+  // ========= ÉCRANS =========
   function show(id){ $$(".screen").forEach(s=>s.classList.remove("active")); $(id).classList.add("active"); }
 
-  // ===== Timer
+  // ========= TIMER =========
   function startTimer(){ stopTimer(); leftSec=DURATION_SEC; updateTimer();
     timer=setInterval(()=>{ if(paused) return;
       leftSec=Math.max(0,leftSec-1); updateTimer();
@@ -201,7 +200,7 @@
   function stopTimer(){ if(timer) clearInterval(timer); timer=null; }
   function updateTimer(){ const h=Math.floor(leftSec/3600),m=Math.floor((leftSec%3600)/60),s=leftSec%60; $("#timer").textContent=`⏱️ ${pad2(h)}:${pad2(m)}:${pad2(s)}`; }
 
-  // ===== Start
+  // ========= DEMARRER =========
   $("#startBtn").addEventListener("click", async ()=>{
     if(!QUESTIONS.length) return alert("questions.json introuvable.");
     const count=Math.max(1, Math.min(parseInt($("#count").value||"120",10), QUESTIONS.length));
@@ -209,7 +208,6 @@
     DURATION_SEC=Math.max(1, parseInt($("#duration").value||"120",10))*60;
     correctCount=0; ANSWERS.length=0; paused=false; started=true; sessionId=null; sessionStart=Date.now();
 
-    // pick + shuffle
     const base=shuffle([...QUESTIONS]).slice(0,count);
     PICK=base.map(q=>({question:q.question, correct:q.correct,
       options:shuffle([{letter:"A",text:q.a},{letter:"B",text:q.b},{letter:"C",text:q.c}]),
@@ -232,7 +230,7 @@
     }
   });
 
-  // ===== Render question
+  // ========= RENDU 1 QUESTION =========
   let qStartMs=0;
   function render(){
     const q=PICK[CUR];
@@ -243,44 +241,65 @@
     const opts=$("#opts"); opts.innerHTML="";
     q.options.forEach(opt=>{
       const lab=document.createElement("label"); lab.className="opt"; lab.dataset.letter=opt.letter;
-      const r=document.createElement("input"); r.type="radio"; r.name="answer"; r.value=opt.letter; if(q.user===opt.letter) r.checked=true;
+      const r=document.createElement("input"); r.type="radio"; r.name="answer"; r.value=opt.letter; r.checked=(q.user===opt.letter);
       const span=document.createElement("span"); span.innerHTML=`<span class="badge">${opt.letter}</span>${esc(opt.text)}`;
       lab.append(r,span); opts.appendChild(lab);
+
       r.addEventListener("change", ()=>{
+        if (paused) return;
         q.user=opt.letter;
+        // feedback immédiat uniquement en entraînement
         $$(".opt",opts).forEach(o=>o.classList.remove("good","bad"));
-        if(MODE==="training"){ lab.classList.add(opt.letter===q.correct?"good":"bad"); if(opt.letter===q.correct && !ANSWERS.some(a=>a.i===CUR)) correctCount++; }
-        updateMeta(); updateNextState();
+        if(MODE==="training"){
+          lab.classList.add(opt.letter===q.correct?"good":"bad");
+          if(opt.letter===q.correct && !ANSWERS.some(a=>a.i===CUR)) correctCount++;
+        }
+        $("#perfs").textContent=`Bonnes : ${correctCount}`;
+        updateNextState();
       });
     });
 
-    // confiance
-    $$("input[name=conf]").forEach(i=>{ i.checked=(i.value===q.conf); i.onchange=()=>{ q.conf=i.value; updateNextState(); }; });
-    $("#prevBtn").disabled=(CUR===0);
-    $("#nextBtn").textContent=(CUR===PICK.length-1)?"Terminer ✅":"Suivant ➡️";
-    updateMeta(); updateNextState();
-    qStartMs=performance.now();
+    // (ré)appliquer la confiance
+    $$("input[name=conf]").forEach(i=>{
+      i.checked = (i.value===q.conf);
+      i.onchange = ()=>{ if(!paused){ q.conf=i.value; updateNextState(); } };
+    });
+
+    $("#prevBtn").disabled = (CUR===0);
+    $("#nextBtn").textContent = (CUR===PICK.length-1) ? "Terminer ✅" : "Suivant ➡️";
+    updateNextState();
+
+    qStartMs = performance.now();
   }
-  function updateMeta(){ $("#perfs").textContent=`Bonnes : ${correctCount}`; }
-  function updateNextState(){ const q=PICK[CUR]; $("#nextBtn").disabled=!(q.user && q.conf); }
 
-  // ===== Nav
-  $("#prevBtn").addEventListener("click", ()=>{ saveCurrentAnswer(); if(CUR>0){CUR--;} render(); });
-  $("#nextBtn").addEventListener("click", ()=>{ saveCurrentAnswer(); if(CUR<PICK.length-1){CUR++; render();} else { finish(false);} });
+  function updateNextState(){
+    const q=PICK[CUR];
+    const ready = !!q.user && !!q.conf;
+    $("#nextBtn").disabled = !ready;
+  }
 
-  function saveCurrentAnswer(){ const q=PICK[CUR]; const delta=Math.max(0, performance.now()-qStartMs); q.time_ms+=delta;
-    const idx=ANSWERS.findIndex(a=>a.i===CUR); const row={i:CUR, choice:q.user, correct:q.correct, confidence:q.conf, ms:Math.round(q.time_ms)};
+  // ========= NAVIGATION =========
+  $("#prevBtn").addEventListener("click", ()=>{ if(paused) return; saveCurrentAnswer(); if(CUR>0){CUR--;} render(); });
+  $("#nextBtn").addEventListener("click", ()=>{ if(paused) return; saveCurrentAnswer(); if(CUR<PICK.length-1){CUR++; render();} else { finish(false);} });
+
+  function saveCurrentAnswer(){
+    const q=PICK[CUR];
+    const delta=Math.max(0, performance.now()-qStartMs);
+    q.time_ms += delta;
+    const row={ i:CUR, choice:q.user, correct:q.correct, confidence:q.conf, ms:Math.round(q.time_ms) };
+    const idx=ANSWERS.findIndex(a=>a.i===CUR);
     if(idx>=0) ANSWERS[idx]=row; else ANSWERS.push(row);
   }
 
-  // ===== Pause / Reprendre / Arrêter
-  $("#pauseBtn").addEventListener("click", ()=>{ if(!started||paused) return; paused=true; $("#pauseBtn").disabled=true; $("#resumeBtn").disabled=false; $$("input[type=radio]").forEach(r=>r.disabled=true); });
-  $("#resumeBtn").addEventListener("click", ()=>{ if(!started||!paused) return; paused=false; $("#pauseBtn").disabled=false; $("#resumeBtn").disabled=true; $$("input[type=radio]").forEach(r=>r.disabled=false); });
+  // ========= PAUSE / REPRENDRE / ARRÊTER =========
+  $("#pauseBtn").addEventListener("click", ()=>{ if(!started||paused) return; paused=true; $("#pauseBtn").disabled=true; $("#resumeBtn").disabled=false; $$("input[type=radio]").forEach(r=>r.disabled=true); $("#nextBtn").disabled=true; });
+  $("#resumeBtn").addEventListener("click", ()=>{ if(!started||!paused) return; paused=false; $("#pauseBtn").disabled=false; $("#resumeBtn").disabled=true; $$("input[type=radio]").forEach(r=>r.disabled=false); updateNextState(); });
   $("#stopBtn").addEventListener("click", ()=>{ if(!started) return; if(!confirm("Arrêter le test ?")) return; saveCurrentAnswer(); finish(true); });
 
-  // ===== Finish (sauvegarde Firestore + local fallback)
+  // ========= FIN & SAUVEGARDE =========
   async function finish(fromTimeUp){
     stopTimer(); saveCurrentAnswer(); started=false; paused=false;
+
     const total=PICK.length;
     const correct=ANSWERS.filter(a=>a.choice && a.choice===a.correct).length;
     const answered=ANSWERS.filter(a=>a.choice).length;
@@ -299,25 +318,18 @@
       `Élevé: ${fmt(confStats.highOk,confStats.high)}`;
     show("#results");
 
-    // Désactiver actions
     $("#pauseBtn").disabled=true; $("#resumeBtn").disabled=true; $("#stopBtn").disabled=true;
 
-    // Sauvegarde Firestore (si connecté)
     if (window.CURRENT_USER && window.__fb?.db){
       try{
         const { addDoc, collection, serverTimestamp } = await import("https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js");
-        // maj ou create session summary
-        let sid = sessionId;
-        if (!sid) {
-          const ref = await addDoc(collection(window.__fb.db, "users", window.CURRENT_USER.uid, "sessions"), {
-            createdAt: serverTimestamp(), mode: MODE, total, correct, percent, durationSec: DURATION_SEC, elapsedSec
-          });
-          sid = ref.id;
-        } else {
-          // créer un second doc "final" si besoin; pour rester simple on ajoute une ligne 'final' dans answers
-        }
-        // enregistrer les réponses en sous-collection
-        const ansCol = collection(window.__fb.db, "users", window.CURRENT_USER.uid, "sessions", sid, "answers");
+        // Créer le résumé de session
+        const ref = await addDoc(collection(window.__fb.db, "users", window.CURRENT_USER.uid, "sessions"), {
+          createdAt: serverTimestamp(), mode: MODE, total, correct, percent,
+          durationSec: DURATION_SEC, elapsedSec
+        });
+        const ansCol = collection(window.__fb.db, "users", window.CURRENT_USER.uid, "sessions", ref.id, "answers");
+        // Enregistrer chaque réponse (avec confiance & temps)
         for (const a of ANSWERS){
           await addDoc(ansCol, {
             i: a.i, userAnswer: a.choice || null, correctAnswer: a.correct,
@@ -327,19 +339,17 @@
             createdAt: serverTimestamp()
           });
         }
-        // ajouter une ligne récap finale
-        await addDoc(ansCol, { summary:true, correct, total, percent, answered, elapsedSec, finishedAt: serverTimestamp() });
-      }catch(e){ console.warn("Sauvegarde Firestore KO -> fallback local.", e); saveLocal(percent); }
+      }catch(e){ console.warn("Sauvegarde Firestore KO (fallback local).", e); saveLocal(percent); }
     } else {
       saveLocal(percent);
     }
   }
 
-  // ===== Local fallback (au cas où non connecté)
+  // ========= LOCAL FALLBACK =========
   function getLocal(){ try{ return JSON.parse(localStorage.getItem(LOCAL_KEY)||"[]"); }catch{ return []; } }
   function saveLocal(p){ const arr=getLocal(); arr.push({t:Date.now(), p}); localStorage.setItem(LOCAL_KEY, JSON.stringify(arr.slice(-100))); }
 
-  // ===== Review / Restart
+  // ========= REVIEW / RESTART =========
   $("#reviewMistakes").addEventListener("click", ()=>{
     const wrongIdx=ANSWERS.filter(a=>a.choice && a.choice!==a.correct).map(a=>a.i);
     if(!wrongIdx.length){ alert("Bravo, aucune erreur à revoir !"); return; }
@@ -352,7 +362,7 @@
   });
   $("#restart").addEventListener("click", ()=>{ show("#setup"); $("#setupBar").style.width="0%"; setTimeout(()=>$("#setupBar").style.width="100%",20); });
 
-  // ===== Raccourcis clavier
+  // ========= Raccourcis =========
   document.addEventListener("keydown",(e)=>{
     if (!$("#test").classList.contains("active")) return;
     const mapChoice={ "1":"A","2":"B","3":"C" }; if(mapChoice[e.key]){ const r=$(`input[name=answer][value="${mapChoice[e.key]}"]`); if(r && !r.disabled) r.click(); }
