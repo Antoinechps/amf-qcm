@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<title>QCM AMF — Compte, sessions, faiblesse (Firebase)</title>
+<title>QCM AMF — Mon compte, faiblesses, détails (Firebase)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root{
@@ -53,6 +53,7 @@
   canvas{max-width:100%;height:240px;border:1px solid var(--border);border-radius:8px;background:var(--card)}
   .who{color:var(--muted)}
   .toggle{display:flex;align-items:center;gap:8px}
+  .pill{display:inline-block;padding:2px 8px;border:1px solid var(--border);border-radius:999px;margin-right:6px}
 </style>
 </head>
 <body>
@@ -159,9 +160,40 @@
       <tr><th>Date</th><th>Mode</th><th>Questions</th><th>Score</th><th>Durée</th><th></th></tr>
     </thead><tbody></tbody></table>
 
+    <div class="row" style="margin-top:10px">
+      <span class="pill">Filtrer par thème</span>
+      <select id="themeFilter"><option value="">Tous les thèmes</option></select>
+      <button id="weakTestBtn" class="ghost">Cibler mes faiblesses…</button>
+    </div>
+
     <h3 style="margin-top:12px">Questions difficiles</h3>
     <table id="weakTable"><thead>
       <tr><th>Question (extrait)</th><th>Thème</th><th>Réussite</th><th>Temps moyen</th></tr>
+    </thead><tbody></tbody></table>
+  </section>
+
+  <!-- Détail session -->
+  <section id="sessionDetail" class="panel screen">
+    <h2>Détail de la session</h2>
+    <div id="sessMeta" class="row" style="margin-bottom:8px"></div>
+    <div class="row" style="margin-bottom:8px">
+      <span class="pill">Filtrer</span>
+      <select id="detailTheme"><option value="">Tous thèmes</option></select>
+      <select id="detailCorrect">
+        <option value="">Toutes</option>
+        <option value="ok">Justes</option>
+        <option value="ko">Fausses</option>
+      </select>
+      <select id="detailConfidence">
+        <option value="">Confiance (toutes)</option>
+        <option value="low">Bas</option>
+        <option value="mid">Moyen</option>
+        <option value="high">Élevé</option>
+      </select>
+      <button id="backToAccount" class="ghost">⬅️ Retour “Mon compte”</button>
+    </div>
+    <table id="detailTable"><thead>
+      <tr><th>#</th><th>Question</th><th>Thème</th><th>Réponse</th><th>Bonne</th><th>Confiance</th><th>Temps</th></tr>
     </thead><tbody></tbody></table>
   </section>
 </main>
@@ -213,19 +245,17 @@
 </script>
 
 <script>
-  // ===== Utils
+  // ---------- Utils
   const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
   const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
   const pad2=n=>String(n).padStart(2,"0");
   const esc=s=>(s||"").toString().replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
   const fmtDate=ts=> new Date(ts).toLocaleString();
-  const msToStr=ms=>{const m=Math.round(ms/1000/60); return m+" min"; }
+  const msToStr=ms=> Math.round(ms/1000)+" s";
   const secToStr=s=>{ const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), ss=s%60; return `${pad2(h)}:${pad2(m)}:${pad2(ss)}`; }
-
-  // petit hash stable (FNV-1a) pour ID de question
   function hashId(str){ let h=0x811c9dc5; for (let i=0;i<str.length;i++){ h^=str.charCodeAt(i); h = (h>>>0) * 0x01000193;} return (h>>>0).toString(16); }
 
-  // ===== Theme toggle (clair par défaut)
+  // ---------- Thème (clair par défaut)
   const theme = $("#theme");
   if (localStorage.getItem("amf_theme") === "dark") { document.body.classList.add("dark"); theme.checked=false; }
   else { theme.checked=true; }
@@ -234,24 +264,25 @@
     else { document.body.classList.add("dark"); localStorage.setItem("amf_theme","dark"); }
   });
 
-  // ===== State global test
+  // ---------- État test
   let QUESTIONS=[], PICK=[], CUR=0;
   let MODE="exam";
   let DURATION_SEC=0, leftSec=0, timer=null, paused=false, started=false;
-  let correctCount=0, sessionId=null, sessionStart=null;
+  let correctCount=0, sessionStart=null;
+  let CURRENT_SESSION_ID=null;
   const ANSWERS=[]; // {i, questionId, choice, correct, confidence, ms, qText, theme?}
 
-  // Charger questions
+  // Charger questions.json
   fetch("questions.json").then(r=>r.json()).then(data=>{
     QUESTIONS=(data||[]).map(q=>({ ...q, id: q.id || hashId(q.question||"") }));
     $("#totalSpan").textContent="Total : "+QUESTIONS.length+" questions";
     $("#setupBar").style.width="100%";
   }).catch(()=>{$("#totalSpan").textContent="⚠️ Impossible de charger questions.json";});
 
-  // Screens
+  // ---------- Screens
   function show(id){ $$(".screen").forEach(s=>s.classList.remove("active")); $(id).classList.add("active"); }
 
-  // Timer + pause/stop robustes
+  // ---------- Timer
   function startTimer(){ stopTimer(); leftSec=DURATION_SEC; updateTimer();
     timer=setInterval(()=>{ if(paused) return; leftSec=Math.max(0,leftSec-1); updateTimer();
       $("#runBar").style.width = `${(1-leftSec/DURATION_SEC)*100}%`;
@@ -261,22 +292,23 @@
   function stopTimer(){ if(timer){ clearInterval(timer); } timer=null; }
   function updateTimer(){ $("#timer").textContent = "⏱️ "+secToStr(leftSec); }
 
-  // Setup → Test
-  $("#startBtn").addEventListener("click", async ()=>{
+  // ---------- Lancer un test générique
+  $("#startBtn").addEventListener("click", ()=> startGenericTest());
+
+  async function startGenericTest(prefilledSelection=null){
     if(!QUESTIONS.length) return alert("questions.json introuvable.");
-    const count = Math.max(1, Math.min(parseInt($("#count").value||"120",10), QUESTIONS.length));
+    const baseSel = prefilledSelection || shuffle([...QUESTIONS]).slice(0, Math.max(1, Math.min(parseInt($("#count").value||"120",10), QUESTIONS.length)));
     MODE=$("#mode").value;
     DURATION_SEC=Math.max(1, parseInt($("#duration").value||"120",10))*60;
-    correctCount=0; ANSWERS.length=0; paused=false; started=true; sessionId=null; sessionStart=Date.now();
 
-    const base=shuffle([...QUESTIONS]).slice(0,count);
-    PICK=base.map(q=>({
+    correctCount=0; ANSWERS.length=0; paused=false; started=true; sessionStart=Date.now();
+    PICK=baseSel.map(q=>({
       id:q.id, theme:q.theme||null, question:q.question, correct:q.correct,
       options:shuffle([{letter:"A",text:q.a},{letter:"B",text:q.b},{letter:"C",text:q.c}]),
       user:null, conf:null, time_ms:0
     }));
-
-    CUR=0; show("#test"); render(); startTimer();
+    CUR=0; CURRENT_SESSION_ID=null;
+    show("#test"); render(); startTimer();
     $("#pauseBtn").disabled=false; $("#resumeBtn").disabled=true; $("#stopBtn").disabled=false;
     $("#modeLabel").textContent=`Mode : ${MODE==="exam"?"Examen":"Entraînement"}`;
 
@@ -284,15 +316,15 @@
       try{
         const { addDoc, collection, serverTimestamp } = await import("https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js");
         const ref = await addDoc(collection(window.__fb.db, "users", window.CURRENT_USER.uid, "sessions"), {
-          createdAt: serverTimestamp(), mode: MODE, total: count, correct: 0, percent: 0,
+          createdAt: serverTimestamp(), mode: MODE, total: PICK.length, correct: 0, percent: 0,
           durationSec: DURATION_SEC, elapsedSec: 0
         });
-        sessionId = ref.id;
+        CURRENT_SESSION_ID = ref.id;
       }catch(e){ console.warn("Création session KO", e); }
     }
-  });
+  }
 
-  // Render 1 question
+  // ---------- Rendu 1 question
   let qStartMs=0;
   function render(){
     const q=PICK[CUR];
@@ -335,7 +367,7 @@
     $("#nextBtn").disabled = !(q.user && q.conf) || paused;
   }
 
-  // Navigation
+  // ---------- Navigation
   $("#prevBtn").addEventListener("click", ()=>{ if(paused) return; saveCurrentAnswer(); if(CUR>0){CUR--;} render(); });
   $("#nextBtn").addEventListener("click", ()=>{ if(paused) return; saveCurrentAnswer(); if(CUR<PICK.length-1){CUR++; render();} else { finish(false);} });
 
@@ -351,16 +383,13 @@
     if(idx>=0) ANSWERS[idx]=row; else ANSWERS.push(row);
   }
 
-  // Pause / Resume / Stop (fiabilisé)
-  function setInputsDisabled(dis){
-    $$("input[type=radio]").forEach(r=>r.disabled=dis);
-    updateNextState();
-  }
+  // ---------- Pause / Reprendre / Arrêter
+  function setInputsDisabled(dis){ $$("input[type=radio]").forEach(r=>r.disabled=dis); updateNextState(); }
   $("#pauseBtn").addEventListener("click", ()=>{ if(!started||paused) return; paused=true; $("#pauseBtn").disabled=true; $("#resumeBtn").disabled=false; setInputsDisabled(true); });
   $("#resumeBtn").addEventListener("click", ()=>{ if(!started||!paused) return; paused=false; $("#pauseBtn").disabled=false; $("#resumeBtn").disabled=true; setInputsDisabled(false); });
   $("#stopBtn").addEventListener("click", ()=>{ if(!started) return; if(!confirm("Arrêter le test ?")) return; saveCurrentAnswer(); finish(true); });
 
-  // Fin + sauvegarde
+  // ---------- Fin & sauvegarde Firestore
   async function finish(fromTimeUp){
     stopTimer(); saveCurrentAnswer(); started=false; paused=false;
     $("#pauseBtn").disabled=true; $("#resumeBtn").disabled=true; $("#stopBtn").disabled=true;
@@ -386,10 +415,13 @@
     if (window.CURRENT_USER && window.__fb?.db){
       try{
         const { addDoc, collection, serverTimestamp } = await import("https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js");
+        // session summary
         const ref = await addDoc(collection(window.__fb.db, "users", window.CURRENT_USER.uid, "sessions"), {
           createdAt: serverTimestamp(), mode: MODE, total, correct, percent,
           durationSec: DURATION_SEC, elapsedSec
         });
+        CURRENT_SESSION_ID = ref.id;
+        // answers
         const ansCol = collection(window.__fb.db, "users", window.CURRENT_USER.uid, "sessions", ref.id, "answers");
         for (const a of ANSWERS){
           await addDoc(ansCol, {
@@ -403,7 +435,7 @@
     }
   }
 
-  // Review / Restart
+  // ---------- Review / Restart
   $("#reviewMistakes").addEventListener("click", ()=>{
     const wrongIdx=ANSWERS.filter(a=>a.choice && a.choice!==a.correct).map(a=>a.i);
     if(!wrongIdx.length){ alert("Bravo, aucune erreur à revoir !"); return; }
@@ -415,13 +447,13 @@
     $("#modeLabel").textContent="Mode : Révision";
   });
   $("#restart").addEventListener("click", ()=>{ show("#setup"); $("#setupBar").style.width="0%"; setTimeout(()=>$("#setupBar").style.width="100%",20); });
-  $("#toAccountAfter").addEventListener("click", ()=>{ showAccount(); });
+  $("#toAccountAfter").addEventListener("click", ()=> showAccount());
 
-  // Nav header
+  // ---------- Navigation header
   $("#gotoAccount").addEventListener("click", ()=> showAccount());
   $("#gotoTest").addEventListener("click", ()=> show("#setup"));
 
-  // ===== Partie “Mon compte”
+  // ===================== “Mon compte” =====================
   async function showAccount(){
     if (!window.CURRENT_USER || !window.__fb?.db){ alert("Connecte-toi pour voir “Mon compte”."); return; }
     show("#account");
@@ -437,7 +469,8 @@
     renderSessions(sessions);
     renderKpisAndChart(sessions);
 
-    // Weak questions (agréger sur toutes les réponses)
+    // Agrégation “faiblesses” sur toutes les réponses
+    const themeSet = new Set();
     const weakMap = new Map(); // questionId -> {seen, correct, totalTime, sampleText, theme}
     for (const s of sessions){
       const aq = query(collection(window.__fb.db, "users", window.CURRENT_USER.uid, "sessions", s.id, "answers"));
@@ -451,18 +484,54 @@
         w.seen += 1;
         w.correct += a.isCorrect ? 1 : 0;
         w.totalTime += a.timeMs||0;
+        if (a.theme) themeSet.add(a.theme);
       });
     }
-    const weakList = [...weakMap.entries()].map(([id,w])=>{
-      return {
-        id,
-        text: (w.sampleText||"").slice(0,120)+"…",
-        theme: w.theme||"",
-        acc: w.seen ? Math.round(100*w.correct/w.seen) : 0,
-        avgMs: w.seen ? Math.round(w.totalTime/w.seen) : 0
-      };
-    }).sort((a,b)=> a.acc - b.acc || b.avgMs - a.avgMs).slice(0,20);
-    renderWeak(weakList);
+    // remplir le filtre thème (Mon compte)
+    const tf = $("#themeFilter"); tf.innerHTML = `<option value="">Tous les thèmes</option>` + [...themeSet].sort().map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join("");
+    // construire la liste
+    window.__weakListAll = [...weakMap.entries()].map(([id,w])=>({
+      id, text:(w.sampleText||"").slice(0,120)+"…", theme:w.theme||"",
+      acc: w.seen ? Math.round(100*w.correct/w.seen) : 0,
+      avgMs: w.seen ? Math.round(w.totalTime/w.seen) : 0
+    })).sort((a,b)=> a.acc - b.acc || b.avgMs - a.avgMs);
+
+    renderWeakFiltered();
+
+    tf.onchange = renderWeakFiltered;
+    function renderWeakFiltered(){
+      const val = tf.value || "";
+      const list = window.__weakListAll.filter(w => !val || (w.theme||"")===val).slice(0,50);
+      const tbody=$("#weakTable tbody"); tbody.innerHTML="";
+      if (!list.length){ tbody.innerHTML=`<tr><td colspan="4" style="color:var(--muted)">Aucune donnée pour ce filtre.</td></tr>`; return; }
+      list.forEach(w=>{
+        const tr=document.createElement("tr");
+        tr.innerHTML = `<td title="${esc(w.text)}">${esc(w.text)}</td>
+                        <td>${esc(w.theme||"—")}</td>
+                        <td><b>${w.acc}%</b></td>
+                        <td>${Math.round(w.avgMs/1000)} s</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+
+    // bouton “Cibler mes faiblesses”
+    $("#weakTestBtn").onclick = ()=>{
+      const theme = tf.value || "";
+      const pool = window.__weakListAll.filter(w => !theme || (w.theme||"")===theme);
+      if (!pool.length) { alert("Pas assez de données pour ce thème."); return; }
+      const N = Math.min(120, Math.max(5, parseInt(prompt("Combien de questions (5–120) ?", "40")||"40",10)));
+      // ordonner par faible réussite puis temps moyen élevé
+      const top = pool.slice(0, N);
+      // mapper vers QUESTIONS par id
+      const pick = [];
+      const byId = new Map(QUESTIONS.map(q=>[q.id,q]));
+      top.forEach(w=>{ if (byId.has(w.id)) pick.push(byId.get(w.id)); });
+      if (!pick.length) { alert("Impossible de retrouver ces questions dans la base."); return; }
+      // démarrer un test custom
+      $("#mode").value = "training"; // par défaut en entraînement (tu peux changer)
+      $("#duration").value = Math.ceil(pick.length * 1.2); // 1.2 min/question
+      startGenericTest(pick);
+    };
   }
 
   function renderSessions(list){
@@ -477,24 +546,9 @@
                       <td><button class="ghost" data-sid="${s.id}">Détail</button></td>`;
       tbody.appendChild(tr);
     });
-    // bouton détail (ouvre une mini-popup de stats rapides)
     tbody.querySelectorAll("button[data-sid]").forEach(btn=>{
-      btn.onclick = async ()=>{
-        const sid = btn.getAttribute("data-sid");
-        const { collection, getDocs } = await import("https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js");
-        const asnap = await getDocs(collection(window.__fb.db, "users", window.CURRENT_USER.uid, "sessions", sid, "answers"));
-        let total=0, correct=0, answered=0;
-        const conf={low:[0,0], mid:[0,0], high:[0,0]}; // [ok, tot]
-        asnap.forEach(d=>{
-          const a=d.data(); if (a.summary) return;
-          total++; if (a.userAnswer) answered++; if (a.isCorrect) correct++;
-          if (a.confidence){ const k=a.confidence; conf[k][1]++; if (a.isCorrect) conf[k][0]++; }
-        });
-        const p = total? Math.round(100*correct/total):0;
-        alert(`Session ${sid}\nScore: ${correct}/${total} (${p}%)\nRépondu: ${answered}/${total}\nConfiance: Bas ${pct(conf.low[0],conf.low[1])} • Moyen ${pct(conf.mid[0],conf.mid[1])} • Élevé ${pct(conf.high[0],conf.high[1])}`);
-      };
+      btn.onclick = ()=> showSessionDetail(btn.getAttribute("data-sid"));
     });
-    function pct(n,d){ return d? Math.round(100*n/d)+"%":"—"; }
   }
 
   function renderKpisAndChart(sessions){
@@ -509,10 +563,9 @@
     const canvas = $("#accChart");
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0,0,canvas.width,canvas.height);
-    // axes simples
+    // axes
     ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--muted').trim();
     ctx.beginPath(); ctx.moveTo(40,10); ctx.lineTo(40,230); ctx.lineTo(980-20,230); ctx.stroke();
-    // grid 0/50/100
     [0,50,100].forEach(v=>{
       const y = 230 - (v/100)*220;
       ctx.beginPath(); ctx.moveTo(40,y); ctx.lineTo(980-20,y); ctx.stroke();
@@ -528,15 +581,57 @@
     sessions.forEach((s,i)=>{ const x=40+i*step, y=230-(Math.max(0,Math.min(100,s.percent||0))/100)*220; ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill(); });
   }
 
-  function renderWeak(list){
-    const tbody=$("#weakTable tbody"); tbody.innerHTML="";
-    if (!list.length){ tbody.innerHTML=`<tr><td colspan="4" style="color:var(--muted)">Pas assez de données pour calculer vos questions difficiles.</td></tr>`; return; }
-    list.forEach(w=>{
+  // ---------- Détail session (écran dédié)
+  async function showSessionDetail(sessionId){
+    if (!window.CURRENT_USER || !window.__fb?.db) return;
+    show("#sessionDetail");
+    const { collection, getDocs } = await import("https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js");
+    const asnap = await getDocs(collection(window.__fb.db, "users", window.CURRENT_USER.uid, "sessions", sessionId, "answers"));
+    const rows=[];
+    asnap.forEach(d=>{
+      const a=d.data(); if (a.summary) return;
+      rows.push({
+        i:a.i, text:a.qText||"", theme:a.theme||"", correct:a.correctAnswer||"",
+        user:a.userAnswer||"", isCorrect: !!a.isCorrect, conf:a.confidence||"", timeMs:a.timeMs||0
+      });
+    });
+    rows.sort((a,b)=> a.i-b.i);
+    // remplir thèmes pour filtre
+    const themes = [...new Set(rows.map(r=>r.theme||"").filter(Boolean))].sort();
+    const sel = $("#detailTheme"); sel.innerHTML = `<option value="">Tous thèmes</option>` + themes.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join("");
+    // meta
+    $("#sessMeta").innerHTML = `<span class="pill">Questions: ${rows.length}</span>
+                                <span class="pill">Score: ${rows.filter(r=>r.isCorrect).length}/${rows.length}</span>`;
+    // filtres handlers
+    $("#detailTheme").onchange = ()=> renderDetailTable(rows);
+    $("#detailCorrect").onchange = ()=> renderDetailTable(rows);
+    $("#detailConfidence").onchange = ()=> renderDetailTable(rows);
+    $("#backToAccount").onclick = ()=> showAccount();
+    // table
+    renderDetailTable(rows);
+  }
+
+  function renderDetailTable(rows){
+    const fTheme = $("#detailTheme").value || "";
+    const fCorr = $("#detailCorrect").value || "";
+    const fConf = $("#detailConfidence").value || "";
+    const list = rows.filter(r=>{
+      if (fTheme && (r.theme||"")!==fTheme) return false;
+      if (fCorr==="ok" && !r.isCorrect) return false;
+      if (fCorr==="ko" && r.isCorrect) return false;
+      if (fConf && (r.conf||"")!==fConf) return false;
+      return true;
+    });
+    const tbody = $("#detailTable tbody"); tbody.innerHTML="";
+    list.forEach(r=>{
       const tr=document.createElement("tr");
-      tr.innerHTML = `<td title="${esc(w.text)}">${esc(w.text)}</td>
-                      <td>${esc(w.theme||"—")}</td>
-                      <td><b>${w.acc}%</b></td>
-                      <td>${Math.round(w.avgMs/1000)} s</td>`;
+      tr.innerHTML = `<td>${r.i+1}</td>
+                      <td>${esc((r.text||"").slice(0,120))}…</td>
+                      <td>${esc(r.theme||"—")}</td>
+                      <td style="color:${r.isCorrect?'var(--ok)':'var(--bad)'}">${esc(r.user||"—")}</td>
+                      <td>${esc(r.correct||"")}</td>
+                      <td>${esc(r.conf||"—")}</td>
+                      <td>${msToStr(r.timeMs||0)}</td>`;
       tbody.appendChild(tr);
     });
   }
